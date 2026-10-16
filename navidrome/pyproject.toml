@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "musizerr-provider-navidrome"
+version = "1.0.0"
+description = "Browse, like and sync with a Navidrome server, as a Musizerr provider image."
+readme = "README.md"
+requires-python = ">=3.12"
+license = {text = "AGPL-3.0-or-later"}
+dependencies = ["musizerr-sdk>=5.4,<6", "httpx>=0.27,<1"]
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+include = ["musizerr_provider_navidrome*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"

@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.hypothesis/
+.venv/
+.env
+.DS_Store
+# the catalogs and images the scripts write while you work
+catalogs/

@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "musizerr-provider-ftp"
+version = "1.0.0"
+description = "A library stored on an FTP server, as a Musizerr storage provider image."
+readme = "README.md"
+requires-python = ">=3.12"
+license = {text = "AGPL-3.0-or-later"}
+dependencies = ["musizerr-sdk>=5.4,<6"]
+
+[project.optional-dependencies]
+# pyftpdlib: a real FTP server for the tests, in process.
+test = ["pytest>=8", "pyftpdlib>=2,<3"]
+
+[tool.setuptools.packages.find]
+include = ["musizerr_provider_ftp*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"

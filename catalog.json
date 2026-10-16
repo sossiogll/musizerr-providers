@@ -1,0 +1,215 @@
+{
+  "name": "Musizerr providers",
+  "version": 2,
+  "providers": [
+    {
+      "name": "lrclib",
+      "image": "ghcr.io/sossiogll/musizerr-provider-lrclib",
+      "digest": "sha256:23078bf32719633e3556b72d201ce3f6584ef64500c05e6c16e96d0a958dfb6a",
+      "provider_api_version": 5,
+      "roles": [
+        "lyrics"
+      ],
+      "label": "LRCLIB",
+      "description": "Synced and plain lyrics from lrclib.net.",
+      "homepage": "https://lrclib.net",
+      "permissions": {
+        "egress": [
+          "lrclib.net:443"
+        ],
+        "egress_from_settings": [],
+        "filesystem_from_settings": [],
+        "limits": {
+          "memory_mb": null,
+          "open_files": null,
+          "processes": null
+        },
+        "tcp_from_settings": []
+      }
+    },
+    {
+      "name": "acoustid",
+      "image": "ghcr.io/sossiogll/musizerr-provider-acoustid",
+      "digest": "sha256:ff5ad89dd8d06cf49e37730025a8d75fa220ebb6ae7511d014af90e20a66a239",
+      "provider_api_version": 5,
+      "roles": [
+        "identification"
+      ],
+      "label": "AcoustID",
+      "description": "Identifies what an audio file really is from its fingerprint (Chromaprint + AcoustID). Needs an AcoustID API key.",
+      "homepage": "https://acoustid.org",
+      "permissions": {
+        "egress": [
+          "api.acoustid.org:443"
+        ],
+        "egress_from_settings": [],
+        "filesystem_from_settings": [],
+        "limits": {
+          "memory_mb": null,
+          "open_files": null,
+          "processes": null
+        },
+        "tcp_from_settings": []
+      }
+    },
+    {
+      "name": "ftp",
+      "image": "ghcr.io/sossiogll/musizerr-provider-ftp",
+      "digest": "sha256:6417663dc113b9592fe4b4422dde6ba29a838778bc8f8bae2b0435328fdf480c",
+      "provider_api_version": 5,
+      "roles": [
+        "storage"
+      ],
+      "label": "FTP Storage",
+      "description": "Keeps the library on an FTP server (passive mode): store, stream with seek, list.",
+      "homepage": "https://github.com/sossiogll/musizerr-providers",
+      "permissions": {
+        "egress": [],
+        "egress_from_settings": [],
+        "filesystem_from_settings": [],
+        "limits": {
+          "memory_mb": null,
+          "open_files": null,
+          "processes": null
+        },
+        "tcp_from_settings": [
+          {
+            "ports": "any",
+            "setting": "host"
+          }
+        ]
+      }
+    },
+    {
+      "name": "lidarr",
+      "image": "ghcr.io/sossiogll/musizerr-provider-lidarr",
+      "digest": "sha256:7e82cdc97d94117c0335f7005b0b8e452eb26285c623b861f38e44faf9a1ce62",
+      "provider_api_version": 5,
+      "roles": [
+        "download"
+      ],
+      "label": "Lidarr",
+      "description": "Asks your Lidarr server to get the album of a track (or a whole album) and follows the import.",
+      "homepage": "https://lidarr.audio",
+      "permissions": {
+        "egress": [
+          "musicbrainz.org:443"
+        ],
+        "egress_from_settings": [
+          "url"
+        ],
+        "filesystem_from_settings": [],
+        "limits": {
+          "memory_mb": null,
+          "open_files": null,
+          "processes": null
+        },
+        "tcp_from_settings": []
+      }
+    },
+    {
+      "name": "local",
+      "image": "ghcr.io/sossiogll/musizerr-provider-local",
+      "digest": "sha256:eb729d69d195dbf34740ca63cfdfc636b09bcb90e2e901f4f1b2c6b88d905ae8",
+      "provider_api_version": 5,
+      "roles": [
+        "storage"
+      ],
+      "label": "Local Storage",
+      "description": "Keeps the library in a folder of the machine Musizerr runs on.",
+      "homepage": "https://github.com/sossiogll/musizerr-providers",
+      "permissions": {
+        "egress": [],
+        "egress_from_settings": [],
+        "filesystem_from_settings": [
+          {
+            "mode": "rw",
+            "setting": "root_dir"
+          }
+        ],
+        "limits": {
+          "memory_mb": null,
+          "open_files": null,
+          "processes": null
+        },
+        "tcp_from_settings": []
+      }
+    },
+    {
+      "name": "musicbrainz",
+      "image": "ghcr.io/sossiogll/musizerr-provider-musicbrainz",
+      "digest": "sha256:18d629c54a74864a933338636c235cf8df0695851f5124f3f2c82bc69451f2de",
+      "provider_api_version": 5,
+      "roles": [
+        "metadata"
+      ],
+      "label": "MusicBrainz",
+      "description": "Music metadata from the MusicBrainz open encyclopedia: search, artists, releases, ISRC lookup.",
+      "homepage": "https://musicbrainz.org",
+      "permissions": {
+        "egress": [
+          "musicbrainz.org:443"
+        ],
+        "egress_from_settings": [],
+        "filesystem_from_settings": [],
+        "limits": {
+          "memory_mb": null,
+          "open_files": null,
+          "processes": null
+        },
+        "tcp_from_settings": []
+      }
+    },
+    {
+      "name": "navidrome",
+      "image": "ghcr.io/sossiogll/musizerr-provider-navidrome",
+      "digest": "sha256:c9162408caf7f9d4069e95d9fcfafcf6cf9a7f0aaa05cbd1ebe3e6fd7a7dc9a7",
+      "provider_api_version": 5,
+      "roles": [
+        "metadata",
+        "sync"
+      ],
+      "label": "Navidrome",
+      "description": "Browse your Navidrome library, see what you already own, and keep likes and playlists in sync with it.",
+      "homepage": "https://www.navidrome.org",
+      "permissions": {
+        "egress": [],
+        "egress_from_settings": [
+          "url"
+        ],
+        "filesystem_from_settings": [],
+        "limits": {
+          "memory_mb": null,
+          "open_files": null,
+          "processes": null
+        },
+        "tcp_from_settings": []
+      }
+    },
+    {
+      "name": "youtube",
+      "image": "ghcr.io/sossiogll/musizerr-provider-youtube",
+      "digest": "sha256:645a185a9d125865be9c1ecceac1dcab4190eda3aabba4f40903b50cbf618741",
+      "provider_api_version": 5,
+      "roles": [
+        "metadata"
+      ],
+      "label": "YouTube",
+      "description": "Imports the videos a user liked on YouTube (Music category) as favorites. No catalog, no playback.",
+      "homepage": "https://www.youtube.com",
+      "permissions": {
+        "egress": [
+          "www.googleapis.com:443"
+        ],
+        "egress_from_settings": [],
+        "filesystem_from_settings": [],
+        "limits": {
+          "memory_mb": null,
+          "open_files": null,
+          "processes": null
+        },
+        "tcp_from_settings": []
+      }
+    }
+  ]
+}

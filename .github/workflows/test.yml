@@ -1,0 +1,24 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # With no checkout of Musizerr next to this one, scripts/test.sh runs every provider's tests in the base image
+      # of the providers (it holds the SDK). While that image is a private package, this repository needs read access
+      # to it in the package's settings (Manage Actions access).
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - run: scripts/test.sh

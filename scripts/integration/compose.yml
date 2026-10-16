@@ -1,0 +1,56 @@
+# The services of scripts/integration.sh, under its own compose project (mzp52). Nothing is published on a port the real
+# stack uses: the local registry is bound to 127.0.0.1:18800 and that is all. The gateway is built from the main Musizerr
+# repository (MUSIZERR_REPO, only read) and runs the way its development compose file runs it (docs/gateway.md there):
+# no capability, its own seccomp profile and the unconfined /proc a bubblewrap sandbox needs, no published port.
+services:
+  oci-registry:
+    image: registry:2
+    ports:
+      - "127.0.0.1:18800:5000"
+    volumes:
+      - oci_registry:/var/lib/registry
+
+  # The catalog server: serves the folder scripts/build.sh wrote the catalog in, as http://registry:9000/registry.json.
+  registry:
+    image: python:3.12-slim
+    volumes:
+      - ${MZP52_CATALOG_DIR}:/srv:ro
+    working_dir: /srv
+    command: python -m http.server 9000
+
+  redis:
+    image: redis:7-alpine
+
+  provider-gateway:
+    image: mzp52-provider-gateway
+    build:
+      context: ${MUSIZERR_REPO}
+      dockerfile: gateway/Dockerfile
+      target: production
+    user: "1000:1000"
+    cap_drop: [ALL]
+    security_opt:
+      - seccomp=${MUSIZERR_REPO}/gateway/seccomp/musizerr-gateway.json
+      - systempaths=unconfined
+    volumes:
+      - provider_sockets:/run/musizerr
+      - gateway_state:/var/lib/musizerr-gateway
+      - downloads:/downloads # the library root and the workspaces, the same volume the host's container mounts
+    environment:
+      GATEWAY_FILESYSTEM_ROOTS: /downloads # the folders a provider may be given a path inside of
+
+  # A throwaway FTP server (pyftpdlib), passive mode, the data connection on a port of 30000-30100 that the SERVER picks.
+  ftp-server:
+    image: python:3.12-slim
+    environment:
+      PIP_ROOT_USER_ACTION: ignore
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    volumes:
+      - ./ftp_server.py:/ftp_server.py:ro
+    command: sh -c "pip install -q pyftpdlib==2.2.0 && exec python /ftp_server.py"
+
+volumes:
+  oci_registry:
+  provider_sockets:
+  gateway_state:
+  downloads:
