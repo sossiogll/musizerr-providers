@@ -21,3 +21,32 @@ jobs:
       - run: scripts/test.sh
         env:
           MUSIZERR_SDK: .musizerr/sdk
+
+  source-branch:
+    name: master takes dev only
+    # Changes reach master through a pull request from dev, and only from it (branch protection requires this check).
+    if: github.event_name == 'pull_request' && github.base_ref == 'master'
+    runs-on: ubuntu-latest
+    steps:
+      - name: the pull request comes from dev of this repository
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        run: |
+          if [ "$HEAD_REF" != dev ] || [ "$HEAD_REPO" != "$GITHUB_REPOSITORY" ]; then
+            echo "::error::master takes pull requests from dev only (this one is from $HEAD_REPO:$HEAD_REF)"
+            exit 1
+          fi
+
+  provider-version:
+    name: provider version
+    # A provider that changes gets a new version: its image is published under it once the change is on dev
+    # (publish.yml), and a published version is never published again.
+    if: github.event_name == 'pull_request' && github.base_ref == 'dev'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2 # the merge commit of the pull request and dev, its first parent
+      - name: every changed provider has a greater version than on dev
+        run: scripts/version-check.sh HEAD^1 HEAD
