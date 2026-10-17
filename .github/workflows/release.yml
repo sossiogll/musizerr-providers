@@ -1,0 +1,36 @@
+name: release
+
+# Every push to master (a merged pull request from dev) releases the providers whose version is new: for each
+# entry of catalog.json whose version (its pyproject.toml) has no tag <name>-v<version> yet, it creates the tag on
+# the merge commit and the GitHub release "<label> <version>", whose notes give the image pinned by its digest and
+# the permissions it declares (scripts/release.sh). Tags and releases only: nothing is committed.
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write # the tags and the releases
+  packages: read # the digest of each image, checked against catalog.json
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: release
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: tag and release the new versions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: GHCR_NAMESPACE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}" scripts/release.sh

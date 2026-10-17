@@ -1,0 +1,116 @@
+name: publish
+
+# Every push to dev publishes the providers whose version has no image on GHCR yet: it tests them, builds each for
+# linux/amd64 and linux/arm64 with the main repository's scripts/publish-provider-image.sh (on the published base
+# image), pushes ghcr.io/<owner>/musizerr-provider-<name>:<version>, pins it in catalog.json and commits catalog.json
+# to dev. A push that publishes nothing (catalog.json alone, a script, a README) does nothing. master is never written
+# here: catalog.json reaches it with the next pull request from dev, and master's catalog.json is the one Musizerr
+# instances read. Pushing needs each package connected to this repository (see the README).
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+permissions:
+  contents: write # the commit of catalog.json
+  packages: write
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: publish
+    if: github.ref == 'refs/heads/dev'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the commit of catalog.json may have to be rebased on a dev that moved
+      # The main repository, in a hidden folder that no provider glob sees: its SDK for the tests, its
+      # scripts/publish-provider-image.sh for the images.
+      - uses: actions/checkout@v4
+        with:
+          repository: sossiogll/musizerr
+          path: .musizerr
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: the providers whose version is not published
+        id: unpublished
+        shell: bash
+        run: |
+          set -euo pipefail
+          providers=$(GHCR_NAMESPACE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}" scripts/unpublished.sh | tr '\n' ' ')
+          providers=${providers% }
+          echo "providers=$providers" >> "$GITHUB_OUTPUT"
+          echo "to publish: ${providers:-nothing}"
+      - name: test them
+        if: steps.unpublished.outputs.providers != ''
+        env:
+          PROVIDERS: ${{ steps.unpublished.outputs.providers }}
+          MUSIZERR_SDK: .musizerr/sdk
+        run: |
+          # shellcheck disable=SC2086 # one word per provider
+          scripts/test.sh $PROVIDERS
+      - uses: docker/setup-qemu-action@v3
+        if: steps.unpublished.outputs.providers != ''
+      - name: publish them
+        id: publish
+        if: steps.unpublished.outputs.providers != ''
+        env:
+          PROVIDERS: ${{ steps.unpublished.outputs.providers }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          export MUSIZERR_REPO=$GITHUB_WORKSPACE/.musizerr GHCR_NAMESPACE="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}"
+          failed=""
+          for provider in $PROVIDERS; do
+            echo "::group::$provider"
+            if ! scripts/publish.sh "$provider"; then
+              failed="$failed $provider"
+            elif ! jq -e --arg name "$provider" 'any(.providers[]; .name == $name)' catalog.json >/dev/null; then
+              echo "::error::catalog.json has no entry named $provider: a provider folder is named after its provider"
+              failed="$failed $provider"
+            fi
+            echo "::endgroup::"
+          done
+          if [ -n "$failed" ]; then
+            echo "::error::not published:$failed"
+            exit 1
+          fi
+      # Also after a failure: the images that were pushed are pinned, else they would never be (their version
+      # is published, so no later run publishes it again).
+      - name: commit catalog.json to dev
+        if: ${{ !cancelled() && steps.unpublished.outputs.providers != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          { git show HEAD:catalog.json 2>/dev/null || echo '{"providers": []}'; } > "$RUNNER_TEMP/before.json"
+          published=$(jq -r --slurpfile before "$RUNNER_TEMP/before.json" '
+            ([$before[0].providers[] | {(.name): .digest}] | add // {}) as $pinned
+            | .providers[] | select($pinned[.name] != .digest) | .name' catalog.json)
+          if [ -z "$published" ]; then
+            echo "catalog.json unchanged"
+            exit 0
+          fi
+          message=""
+          for name in $published; do
+            version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$name/pyproject.toml" | head -n 1)
+            message="${message:+$message, }$name $version"
+          done
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add catalog.json
+          git commit -m "catalog: publish $message"
+          # dev may have moved meanwhile: put the commit on top of it.
+          for attempt in 1 2 3; do
+            if git push origin HEAD:refs/heads/dev; then exit 0; fi
+            echo "push refused (attempt $attempt): rebasing on dev"
+            git pull --rebase origin dev
+          done
+          echo "::error::could not push catalog.json to dev"
+          exit 1
