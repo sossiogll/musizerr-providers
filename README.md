@@ -83,6 +83,9 @@ Musizerr, with *allow insecure registry* because the local registry is plain HTT
 
 ### Publishing
 
+The images are published by the CI when a change reaches `dev` (see [How the images are published](#how-the-images-are-published)).
+The same can be done by hand, from a machine logged in to GHCR:
+
 ```sh
 docker login ghcr.io          # a token that may write packages
 scripts/publish.sh [provider...]
@@ -91,8 +94,8 @@ scripts/publish.sh [provider...]
 `publish.sh` calls the main repository's `scripts/publish-provider-image.sh` for each provider: it builds the provider on
 the published base image, takes its labels from the provider itself, pushes
 `ghcr.io/sossiogll/musizerr-provider-<name>:<version>` for `linux/amd64` and `linux/arm64` and writes the entry in
-[`catalog.json`](catalog.json), pinned by the digest of the multi-architecture index. Commit `catalog.json` afterwards: it
-is what a Musizerr source points at, `https://raw.githubusercontent.com/sossiogll/musizerr-providers/master/catalog.json`.
+[`catalog.json`](catalog.json), pinned by the digest of the multi-architecture index. `scripts/unpublished.sh` lists the
+providers whose version has no image yet, the ones the CI would publish.
 
 ### Integration test
 
@@ -110,10 +113,40 @@ the images it built included. See the header of the script.
 
 ## How the images are published
 
-Today they are built by hand, as above. Continuous integration will do it: on a change, a GitHub Actions workflow tests
-every provider, builds the multi-architecture (`linux/amd64`, `linux/arm64`) image of each, pushes it to
-`ghcr.io/sossiogll/musizerr-provider-<name>` and regenerates the catalog with the new digests. A catalog entry pins an
-image **by digest**; an update is a new digest the admin approves, seeing any difference in permissions.
+Two branches: `dev`, where changes land, and `master`, what Musizerr instances read. `master` takes pull requests from
+`dev` only (the check `master takes dev only`), and nothing is ever pushed to it directly.
+
+1. **A branch from `dev`, a pull request into `dev`.** A change to a provider's folder (anything but its Markdown files
+   and a `docs/` folder) raises the `version` in that provider's `pyproject.toml`: the check `provider version`
+   (`scripts/version-check.sh`) fails otherwise. The version is the tag of the provider's image, and a published version
+   is never published again. Changes outside the provider folders (scripts, workflows, this README) need no new version.
+2. **Publishing on `dev`.** Every push to `dev` runs [`publish`](.github/workflows/publish.yml): for each provider whose
+   `ghcr.io/sossiogll/musizerr-provider-<name>:<version>` does not exist yet, it runs its tests, builds the image for
+   `linux/amd64` and `linux/arm64` with the main repository's `scripts/publish-provider-image.sh` (on the published base
+   image), pushes it and pins it in `catalog.json` by the digest of its multi-architecture index; then it commits
+   `catalog.json` to `dev` (`catalog: publish <name> <version>, ...`). A push that changes no version publishes
+   nothing.
+3. **A pull request from `dev` into `master`.** It carries the new `catalog.json` to `master`. The catalog Musizerr
+   instances read is always the one on `master`, at the same URL:
+   `https://raw.githubusercontent.com/sossiogll/musizerr-providers/master/catalog.json`.
+4. **Tag and release on `master`.** Every push to `master` runs [`release`](.github/workflows/release.yml)
+   (`scripts/release.sh`): for each provider of `catalog.json` whose version has no tag `<name>-v<version>` yet, it
+   creates that tag on the merge commit and a GitHub release "<label> <version>" whose notes give the image pinned by
+   its digest and the permissions it declares. A version whose image is not the one `catalog.json` pins is not
+   released, and the run fails.
+
+A catalog entry pins an image **by digest**; an update is a new digest the admin approves in Musizerr, seeing any
+difference in permissions.
+
+### The packages must be connected to this repository
+
+The workflows push with the repository's own `GITHUB_TOKEN`, which may write a package on GHCR only when the package is
+connected to this repository. A maintainer does it once per package, on GitHub: the package's page → *Package settings*
+→ *Manage Actions access* → *Add repository* (this repository, role *Write*), or *Connect repository* where it is
+offered. A connected package also shows in the *Packages* of the repository's sidebar. The packages pushed by hand before
+the workflows existed need this step; a package the workflow creates itself (a new provider) starts connected to this
+repository, check it after its first publication. Without access the push is refused (`denied`) and nothing is
+overwritten.
 
 ## Adding or changing a provider
 
@@ -124,7 +157,10 @@ image **by digest**; an update is a new digest the admin approves, seeing any di
   for a protocol that is not HTTP (and `musizerr_sdk.net.route_module` for its library), `filesystem_from_settings`
   for a folder. A wildcard host (`*.example.com:443`) only where the provider follows redirects to subdomains it cannot
   list, and say why in the provider's README. Add tests for every one, as the existing providers do.
-- Keep the provider's name stable: settings, credentials and identifiers are filed under it.
+- Keep the provider's name stable: settings, credentials and identifiers are filed under it. Its folder is named after
+  it: the image is published as `musizerr-provider-<folder>`.
+- Raise its `version` in `pyproject.toml` in the same pull request: that is what publishes it (see
+  [How the images are published](#how-the-images-are-published)).
 
 ## License
 
