@@ -24,7 +24,7 @@ import pytest
 
 import musizerr_provider_lidarr as lidarr_module
 from helpers import RemoteFailure, make_track, via_runner
-from musizerr_provider_lidarr import LidarrDownloadProvider, LidarrUnreachable
+from musizerr_provider_lidarr import LidarrDownloadProvider, LidarrNotConfigured, LidarrRejected, LidarrUnreachable
 from musizerr_sdk import delegation as ds
 from musizerr_sdk.auth import AuthFlow, AuthSession
 from musizerr_sdk.context import StaticProviderContext
@@ -574,7 +574,8 @@ def test_the_provider_without_a_url_does_nothing(session):
     assert provider.list_delegated_tracks("1", bare) == []
     assert provider.list_delegated_files("1", bare) == []
     assert provider.request_rescan(bare) is None
-    assert provider.register_push_endpoint("http://musizerr/hook", bare) is None
+    with pytest.raises(LidarrNotConfigured, match="URL not configured"):  # a missing URL is a reason, not a silent None
+        provider.register_push_endpoint("http://musizerr/hook", bare)
     assert provider.validate_config({}) is False and provider.validate_config({"url": "http://lidarr:8686"}) is True
 
 
@@ -741,3 +742,190 @@ def test_the_unreachable_lidarr_of_the_sandbox_reaches_the_host_by_the_name_of_t
         via_runner(LidarrDownloadProvider, "poll_delegation", "123", session, provider_name="lidarr")
 
     assert failed.value.type_name == "LidarrUnreachable"
+
+
+# ======================================================================
+# Registering the push callback: a refusal says why, and never shows the token
+# ======================================================================
+
+CALLBACK = "http://frontend/api/delegation/webhook/lidarr?token=s3cr3t-callback-token"
+TOKEN = "s3cr3t-callback-token"
+
+
+class _Notification:
+    """A Lidarr whose notification endpoints answer what they are given: ``get`` for the list, ``write`` for the
+    POST/PUT of the connection (a status and a body, or an exception to raise)."""
+
+    def __init__(self, *, listed=None, write=None, get=None) -> None:
+        self.listed = [] if listed is None else listed
+        self.write = write if write is not None else (201, {"id": 9})
+        self.get_answer = get
+        self.calls: list[tuple[str, str]] = []
+
+    def _answer(self, method: str, url: str, status, body):
+        self.calls.append((method, url.split("/api/v1", 1)[1]))
+        if isinstance(status, Exception):
+            raise status
+        kwargs = {"json": body} if body is not None else {"text": "not json"}
+        return httpx.Response(status, request=httpx.Request(method, url), **kwargs)
+
+    def get(self, url, params=None, headers=None, timeout=None):
+        status, body = self.get_answer if self.get_answer is not None else (200, self.listed)
+        return self._answer("GET", url, status, body)
+
+    def post(self, url, headers=None, json=None, timeout=None):
+        return self._answer("POST", url, *self.write)
+
+    def put(self, url, headers=None, json=None, timeout=None):
+        return self._answer("PUT", url, *self.write)
+
+
+def _lidarr_notifications(monkeypatch, **kwargs) -> _Notification:
+    fake = _Notification(**kwargs)
+    monkeypatch.setattr(lidarr_module.httpx, "get", fake.get)
+    monkeypatch.setattr(lidarr_module.httpx, "post", fake.post)
+    monkeypatch.setattr(lidarr_module.httpx, "put", fake.put)
+    return fake
+
+
+# What Lidarr answers (400) when it cannot reach the callback address it was given: a list of validation failures,
+# each echoing what was sent in ``attemptedValue``.
+VALIDATION = [
+    {
+        "propertyName": "Url", "errorMessage": "Unable to send test message", "attemptedValue": CALLBACK,
+        "severity": "error", "errorCode": "NotNullValidator",
+    },
+    {"propertyName": "", "errorMessage": "Name or service not known (frontend:80)", "severity": "error"},
+]
+
+
+def test_a_validation_failure_of_lidarr_is_raised_with_its_reason(monkeypatch, session):
+    fake = _lidarr_notifications(monkeypatch, write=(400, VALIDATION))
+
+    with pytest.raises(LidarrRejected) as refused:
+        _provider().register_push_endpoint(CALLBACK, session)
+
+    assert str(refused.value) == (
+        "Lidarr refused the request (400): Url: Unable to send test message; Name or service not known (frontend:80)"
+    )
+    assert refused.value.response.status_code == 400
+    assert fake.calls == [("GET", "/notification"), ("POST", "/notification")]
+
+
+def test_the_callback_token_is_not_in_the_message_even_when_lidarr_quotes_the_url(monkeypatch, session):
+    quoting = [{"propertyName": "Url", "errorMessage": f"Unable to reach {CALLBACK} (token {TOKEN} was sent)", "attemptedValue": CALLBACK}]
+    _lidarr_notifications(monkeypatch, write=(400, quoting))
+
+    with pytest.raises(LidarrRejected) as refused:
+        _provider().register_push_endpoint(CALLBACK, session)
+
+    assert TOKEN not in str(refused.value)
+    assert "token=***" in str(refused.value)
+
+
+def test_the_token_is_not_logged_either(monkeypatch, session, caplog):
+    quoting = [{"propertyName": "Url", "errorMessage": f"Unable to reach {CALLBACK}"}]
+    _lidarr_notifications(monkeypatch, write=(400, quoting))
+
+    with caplog.at_level("DEBUG"), pytest.raises(LidarrRejected):
+        _provider().register_push_endpoint(CALLBACK, session)
+
+    assert TOKEN not in caplog.text
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_a_refused_api_key_is_said_and_echoes_nothing(monkeypatch, session, status):
+    _lidarr_notifications(monkeypatch, write=(status, {"message": "Unauthorized", "attemptedValue": CALLBACK}))
+
+    with pytest.raises(LidarrRejected) as refused:
+        _provider().register_push_endpoint(CALLBACK, session)
+
+    assert str(refused.value) == f"Lidarr refused the API key ({status})"
+
+
+def test_an_error_of_lidarr_itself_is_raised_with_its_message(monkeypatch, session):
+    _lidarr_notifications(monkeypatch, write=(500, {"message": "NullReferenceException", "description": "stack"}))
+
+    with pytest.raises(LidarrRejected, match=r"\(500\): NullReferenceException$"):
+        _provider().register_push_endpoint(CALLBACK, session)
+
+
+def test_an_error_without_a_readable_body_says_the_status(monkeypatch, session):
+    _lidarr_notifications(monkeypatch, write=(409, None))
+
+    with pytest.raises(LidarrRejected, match=r"\(409\): Conflict"):
+        _provider().register_push_endpoint(CALLBACK, session)
+
+
+def test_a_refusal_when_updating_the_existing_connection_is_raised_too(monkeypatch, session):
+    fake = _lidarr_notifications(monkeypatch, listed=[{"id": 3, "name": "musizerr"}], write=(400, VALIDATION))
+
+    with pytest.raises(LidarrRejected, match="Unable to send test message"):
+        _provider().register_push_endpoint(CALLBACK, session)
+
+    assert fake.calls == [("GET", "/notification"), ("PUT", "/notification/3")]
+
+
+def test_a_failed_listing_stops_the_registration_instead_of_creating_a_duplicate(monkeypatch, session):
+    fake = _lidarr_notifications(monkeypatch, get=(401, {"message": "Unauthorized"}))
+
+    with pytest.raises(LidarrRejected, match="refused the API key"):
+        _provider().register_push_endpoint(CALLBACK, session)
+
+    assert fake.calls == [("GET", "/notification")]
+
+
+@pytest.mark.parametrize("status", [502, 503, 504])
+def test_a_gateway_status_is_an_unreachable_lidarr(monkeypatch, session, status):
+    _lidarr_notifications(monkeypatch, get=(status, None))
+
+    with pytest.raises(LidarrUnreachable, match="Lidarr unreachable"):
+        _provider().register_push_endpoint(CALLBACK, session)
+
+
+def test_a_lidarr_that_does_not_answer_is_unreachable_with_the_reason(monkeypatch, session):
+    _lidarr_notifications(monkeypatch, get=(httpx.ConnectError("[Errno -2] Name or service not known"), None))
+
+    with pytest.raises(LidarrUnreachable, match="Lidarr unreachable: .*Name or service not known"):
+        _provider().register_push_endpoint(CALLBACK, session)
+
+
+def test_an_accepted_connection_with_an_unreadable_body_is_still_created(monkeypatch, session):
+    _lidarr_notifications(monkeypatch, write=(201, None))
+
+    assert _provider().register_push_endpoint(CALLBACK, session) == "created"
+
+
+@pytest.mark.parametrize("write, kind", [
+    ((400, VALIDATION), "failed"),
+    ((401, {"message": "Unauthorized"}), "auth_failed"),
+    ((404, {"message": "NotFound"}), "not_found"),
+    ((500, {"message": "boom"}), "upstream_error"),
+])
+def test_the_host_hears_a_refusal_with_its_kind_and_reason(monkeypatch, session, write, kind):
+    """Through the runner: the failure is classified by the status of the response, and the message is Lidarr's."""
+    _lidarr_notifications(monkeypatch, write=write)
+
+    with pytest.raises(RemoteFailure) as failed:
+        via_runner(LidarrDownloadProvider, "register_push_endpoint", CALLBACK, session, provider_name="lidarr")
+
+    assert failed.value.kind == kind
+    assert failed.value.type_name == "LidarrRejected"
+    assert str(failed.value).startswith("Lidarr refused")
+    assert TOKEN not in str(failed.value)
+
+
+def test_the_host_hears_an_unreachable_lidarr_by_the_name_of_the_exception(monkeypatch, session):
+    _lidarr_notifications(monkeypatch, get=(httpx.ConnectError("[Errno -3] Temporary failure in name resolution"), None))
+
+    with pytest.raises(RemoteFailure) as failed:
+        via_runner(LidarrDownloadProvider, "register_push_endpoint", CALLBACK, session, provider_name="lidarr")
+
+    assert failed.value.type_name == "LidarrUnreachable"
+    assert "name resolution" in str(failed.value)
+
+
+def test_a_registration_that_worked_still_travels_as_its_outcome_word(monkeypatch, session):
+    _lidarr_notifications(monkeypatch, write=(201, {"id": 9}))
+
+    assert via_runner(LidarrDownloadProvider, "register_push_endpoint", CALLBACK, session, provider_name="lidarr") == "created"

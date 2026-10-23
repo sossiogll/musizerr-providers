@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "musizerr-provider-lidarr"
-version = "1.0.0"
+version = "1.0.1"
 description = "Ask a Lidarr server to get albums, as a Musizerr download provider image."
 readme = "README.md"
 requires-python = ">=3.12"
