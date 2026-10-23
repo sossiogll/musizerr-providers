@@ -10,6 +10,12 @@ track belongs to, and follows the import until the files are in the library.
 - For a whole album (`dispatch_album`) it does the same by album title and artist.
 - The download is **delegated**: Musizerr follows it by polling Lidarr (queue, history, files on disk), and
   Lidarr can tell Musizerr when it is done (the provider registers a Webhook connection in Lidarr, idempotently).
+- Registering the Webhook can fail, and then it says why. Lidarr tests the address when it saves the connection and
+  refuses (400, "Unable to send test message") when it cannot reach it; the provider raises with Lidarr's own message
+  (and for a refused key, an error of Lidarr's or a Lidarr that does not answer, the matching reason), never an empty
+  answer. The callback address must be reachable **from Lidarr**: with both in the same Docker network, use an
+  internal URL such as `http://frontend` as Musizerr's public URL. The callback token is never shown in a message or
+  a log.
 - It is a last-resort provider and **off by default** (`enabled_by_default = False`).
 
 ## Settings
