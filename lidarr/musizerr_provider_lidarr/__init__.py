@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Optional
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 
@@ -146,6 +148,54 @@ def _unless_not_answered(exc: httpx.HTTPStatusError, method: str, path: str) -> 
         raise LidarrUnreachable(str(exc)) from exc
 
 
+class LidarrNotConfigured(Exception):
+    """The provider has no Lidarr URL: there is nothing to talk to. Said with a reason, never swallowed."""
+
+
+class LidarrRejected(httpx.HTTPStatusError):
+    """Lidarr ANSWERED a write with an error status (a validation failure, a refused key, an error of its own),
+    and ``str(exc)`` is the reason it gave. It is an ``httpx.HTTPStatusError`` on purpose: the runner classifies
+    the failure by the status of ``response`` (401/403 refused credentials, 5xx an error upstream, any other
+    4xx a refusal), and the host shows the administrator this message."""
+
+
+_REASON_MAX = 500
+_TOKEN_PARAM = re.compile(r"(?P<lead>[?&;]token=)[^&;#\s'\"<>]*", re.IGNORECASE)
+
+
+def _hide_callback(text: str, callback_url: str) -> str:
+    """``text`` without the callback URL's token. The URL carries the shared token of Musizerr's inbound webhook,
+    and Lidarr (or httpx) may quote it back in a message: it never leaves this provider."""
+    secrets = {value for value in parse_qs(urlsplit(callback_url).query).get("token", []) if value}
+    for secret in secrets:
+        text = text.replace(secret, "***")
+    return _TOKEN_PARAM.sub(lambda m: m.group("lead") + "***", text)
+
+
+def _lidarr_reason(response: httpx.Response) -> str:
+    """What Lidarr says is wrong, from the body of an error answer: a list of validation failures
+    (``[{"propertyName": "Url", "errorMessage": "..."}]``), or an object with a ``message``; the status text when
+    it says nothing readable. Only the message fields are read: ``attemptedValue`` and the rest of a validation
+    failure echo what was sent, the callback URL with its token among it."""
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    items = body if isinstance(body, list) else [body]
+    reasons: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        message = item.get("errorMessage") or item.get("message")
+        if not isinstance(message, str) or not message.strip():
+            continue
+        prop = item.get("propertyName")
+        reason = f"{prop}: {message.strip()}" if isinstance(prop, str) and prop else message.strip()
+        if reason not in reasons:
+            reasons.append(reason)
+    return "; ".join(reasons)[:_REASON_MAX] or response.reason_phrase or "no reason given"
+
+
 class _LidarrClient:
     def __init__(self, base_url: str, api_key: str, timeout: int) -> None:
         self._base = base_url.rstrip("/") + "/api/v1"
@@ -230,6 +280,40 @@ class _LidarrClient:
         except ValueError as exc:  # JSON malformato: Lidarr ha risposto ma in modo illeggibile. Non catturare di piu': un errore del NOSTRO codice deve emergere, non passare per un fallimento di Lidarr.
             logger.error("Lidarr PUT %s failed: %s", path, exc)
             return None
+
+    def notification_call(self, method: str, path: str, body: dict | None = None, *, callback_url: str = "") -> list | dict:
+        """A call on the notifications (Connect connections) that says WHY it failed instead of answering None:
+        the JSON of the answer when Lidarr accepted it; ``LidarrUnreachable`` when it did not answer;
+        ``LidarrRejected`` with Lidarr's own reason when it answered no. ``callback_url`` is hidden in every
+        message (and in the log)."""
+        send = {"GET": httpx.get, "POST": httpx.post, "PUT": httpx.put}[method]
+        kwargs: dict = {"headers": self._headers, "timeout": self._timeout}
+        if body is not None:
+            kwargs["json"] = body
+        try:
+            r = send(f"{self._base}{path}", **kwargs)
+            r.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code in _NOT_ANSWERED:
+                message = _hide_callback(f"Lidarr unreachable: {exc}", callback_url)
+                logger.error("Lidarr %s %s: %s", method, path, message)
+                raise LidarrUnreachable(message) from exc
+            status = exc.response.status_code
+            reason = _hide_callback(_lidarr_reason(exc.response), callback_url)
+            if status in (401, 403):
+                message = f"Lidarr refused the API key ({status})"
+            else:
+                message = f"Lidarr refused the request ({status}): {reason}"
+            logger.error("Lidarr %s %s: %s", method, path, message)
+            raise LidarrRejected(message, request=exc.request, response=exc.response) from None
+        except httpx.RequestError as exc:
+            message = _hide_callback(f"Lidarr unreachable: {exc}", callback_url)
+            logger.error("Lidarr %s %s: %s", method, path, message)
+            raise LidarrUnreachable(message) from None
+        try:
+            return r.json()
+        except ValueError:
+            return {}  # accepted, with a body that is not JSON: Lidarr said yes, which is all the caller needs
 
     def test_connection(self) -> tuple[bool, str]:
         try:
@@ -637,10 +721,16 @@ class LidarrDownloadProvider(DownloadProvider):
         Idempotente: Lidarr rifiuta un secondo POST con lo stesso 'name', quindi
         se la Connection "musizerr" esiste già la aggiorniamo (PUT) con l'URL
         corrente invece di duplicarla.
+
+        Returns "created" or "updated". Raises when it did not work, with the reason: Lidarr tests the callback
+        address when it saves the connection and answers 400 with a list of validation failures when it cannot
+        reach it ("Unable to send test message"), which is the usual failure and is told as Lidarr said it;
+        ``LidarrRejected`` for a refusal (the callback token is hidden in the message), ``LidarrUnreachable`` when
+        Lidarr does not answer, ``LidarrNotConfigured`` without a URL. It never answers None for a failure.
         """
         client = self._client(session)
         if client is None:
-            return None
+            raise LidarrNotConfigured("Lidarr URL not configured")
 
         payload = {
             "onReleaseImport": True,
@@ -655,20 +745,17 @@ class LidarrDownloadProvider(DownloadProvider):
                 {"name": "method", "value": 1},  # POST
             ],
         }
+        listed = client.notification_call("GET", "/notification", callback_url=callback_url)
         existing = next(
-            (n for n in (client._get("/notification") or []) if n.get("name") == "musizerr"),
+            (n for n in (listed if isinstance(listed, list) else []) if isinstance(n, dict) and n.get("name") == "musizerr"),
             None,
         )
         if existing:
             payload["id"] = existing["id"]
-            result = client._put(f"/notification/{existing['id']}", payload)
-            action = "updated"
-        else:
-            result = client._post("/notification", payload)
-            action = "created"
-        if result is None:
-            return None
-        return action
+            client.notification_call("PUT", f"/notification/{existing['id']}", payload, callback_url=callback_url)
+            return "updated"
+        client.notification_call("POST", "/notification", payload, callback_url=callback_url)
+        return "created"
 
     # ------------------------------------------------------------------
     # Internals
