@@ -83,7 +83,7 @@
     {
       "name": "lidarr",
       "image": "ghcr.io/sossiogll/musizerr-provider-lidarr",
-      "digest": "sha256:7e82cdc97d94117c0335f7005b0b8e452eb26285c623b861f38e44faf9a1ce62",
+      "digest": "sha256:cbf1f5e0fd66b8dd879340bdfe3e437412b6a940a50817a22731a2b65fc7693d",
       "provider_api_version": 5,
       "roles": [
         "download"
